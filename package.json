@@ -1,0 +1,12 @@
+{
+  "name": "zhujiaopaike",
+  "version": "1.0.0",
+  "private": true,
+  "description": "助教排班系统，共享数据和实时同步版本",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
