@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>助教排班系统</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f7; min-height: 100vh; color: #1d1d1f; }
+    .header { background: #fff; padding: 16px 20px; border-bottom: 1px solid #e5e5e7; position: sticky; top: 0; z-index: 10; }
+    .header h1 { font-size: 18px; font-weight: 600; }
+    .header p { font-size: 13px; color: #86868b; margin-top: 2px; }
+    .container { max-width: 600px; margin: 0 auto; padding: 16px; }
+    .section, .schedule-card, .stat-item { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .section { border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+    .section-title span { font-size: 12px; color: #86868b; font-weight: 400; }
+    .input-row { display: flex; gap: 8px; }
+    .input-row input { flex: 1; padding: 10px 12px; border: 1.5px solid #e5e5e7; border-radius: 8px; font-size: 14px; outline: none; }
+    .input-row input:focus, .time-edit input:focus { border-color: #0071e3; }
+    button { cursor: pointer; transition: background .2s, transform .15s; }
+    button:active, .pick-tag:active { transform: scale(.97); }
+    .input-row button, .add-btn { background: #0071e3; color: #fff; border: none; border-radius: 8px; font-weight: 500; white-space: nowrap; }
+    .input-row button { padding: 10px 18px; font-size: 14px; }
+    .input-row button:hover, .add-btn:hover, .btn-export:hover { background: #0077ed; }
+    .assistant-tags, .assigned-list, .pick-area { display: flex; flex-wrap: wrap; gap: 8px; }
+    .assistant-tags { margin-top: 12px; min-height: 32px; }
+    .tag { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 500; background: #f0f4ff; color: #0071e3; }
+    .tag.assigned { background: #e8f5e9; color: #2e7d32; }
+    .tag.assigned::before { content: "✓"; font-size: 11px; margin-right: 2px; }
+    .remove, .x { cursor: pointer; opacity: .5; font-size: 15px; line-height: 1; }
+    .remove:hover, .x:hover { opacity: 1; }
+    .empty-hint { font-size: 13px; color: #86868b; padding: 8px 0; }
+    .schedule-card { border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; transition: box-shadow .2s; }
+    .schedule-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+    .time-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .time-label { font-size: 14px; font-weight: 600; }
+    .time-sub { font-size: 11px; color: #86868b; margin-top: 1px; }
+    .time-count { font-size: 12px; color: #86868b; }
+    .assigned-list { margin-bottom: 8px; min-height: 28px; }
+    .assigned-tag { display: inline-flex; align-items: center; gap: 3px; padding: 5px 10px; background: #e8f5e9; color: #2e7d32; border-radius: 16px; font-size: 13px; font-weight: 500; }
+    .pick-area { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e5e7; gap: 6px; }
+    .pick-tag { display: inline-flex; align-items: center; padding: 6px 14px; background: #f5f5f7; color: #1d1d1f; border-radius: 18px; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none; border: 1.5px solid transparent; }
+    .pick-tag:hover { background: #e8edf5; }
+    .pick-tag.picked { background: #0071e3; color: #fff; border-color: #0071e3; }
+    .stats { display: flex; gap: 10px; margin-bottom: 12px; }
+    .stat-item { flex: 1; border-radius: 10px; padding: 12px; text-align: center; }
+    .stat-num { font-size: 24px; font-weight: 700; color: #0071e3; }
+    .stat-label { font-size: 12px; color: #86868b; margin-top: 2px; }
+    .stat-item.green .stat-num { color: #2e7d32; }
+    .stat-item.orange .stat-num { color: #e67e22; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    .actions button { flex: 1; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 500; }
+    .btn-reset { background: #fff; color: #ff3b30; border: 1.5px solid #ff3b30; }
+    .btn-reset:hover { background: #fff5f5; }
+    .btn-export { background: #0071e3; color: #fff; border: none; }
+    .btn-save { background: #2e7d32; color: #fff; border: none; }
+    .btn-save:hover { background: #388e3c; }
+    .time-edit { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .time-edit label { font-size: 13px; color: #86868b; white-space: nowrap; }
+    .time-edit input { padding: 6px 10px; border: 1.5px solid #e5e5e7; border-radius: 6px; font-size: 13px; width: 90px; outline: none; }
+    .upload-area { margin-top: 10px; padding: 14px; border: 2px dashed #d1d1d6; border-radius: 10px; text-align: center; cursor: pointer; }
+    .upload-area:hover { border-color: #5856d6; background: #f8f7ff; }
+    .upload-area p { font-size: 13px; color: #86868b; }
+    .upload-area .icon { font-size: 24px; margin-bottom: 4px; }
+    .upload-result { margin-top: 8px; font-size: 13px; color: #2e7d32; }
+    .upload-result.error { color: #ff3b30; }
+    #fileInput { display: none; }
+    @media (max-width: 400px) {
+      .time-header { flex-direction: column; align-items: flex-start; gap: 2px; }
+      .input-row, .actions { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📋 助教排班系统</h1>
+    <p>添加助教 → 设置时间段 → 安排上课</p>
+  </div>
+
+  <div class="container">
+    <div class="section">
+      <div class="section-title">👤 助教列表 <span id="assistantCount">(0人)</span></div>
+      <div class="input-row">
+        <input type="text" id="assistantInput" placeholder="输入助教姓名，按回车添加">
+        <button onclick="addAssistant()">添加</button>
+      </div>
+      <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+        <div class="icon">📂</div>
+        <p>点击上传 Excel/CSV 表格批量添加助教</p>
+        <p style="font-size:11px;color:#aeaeb2;margin-top:2px;">自动读取第一列姓名</p>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="handleFileUpload(event)">
+      <div id="uploadResult"></div>
+      <div class="assistant-tags" id="assistantTags"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📅 排班安排</div>
+      <div id="scheduleList"></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-item"><div class="stat-num" id="statTotal">0</div><div class="stat-label">总助教</div></div>
+      <div class="stat-item green"><div class="stat-num" id="statAssigned">0</div><div class="stat-label">已安排</div></div>
+      <div class="stat-item orange"><div class="stat-num" id="statFree">0</div><div class="stat-label">空闲</div></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-reset" onclick="resetSchedule()">清空排班</button>
+      <button class="btn-save" onclick="saveToLocal(); alert('已保存')">保存</button>
+      <button class="btn-export" onclick="exportText()">导出</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🕐 时间段设置</div>
+      <div id="timeSlotsConfig"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    let assistants = [];
+    let timeSlots = [
+      { label: '上午一', time: '08:30 - 10:30' },
+      { label: '上午二', time: '10:30 - 12:30' },
+      { label: '下午一', time: '13:30 - 15:30' },
+      { label: '下午二', time: '15:30 - 17:30' },
+    ];
+    let schedule = {};
+
+    function init() {
+      loadFromLocal();
+      renderTimeConfig();
+      renderAll();
+      document.getElementById('assistantInput').addEventListener('keydown', event => {
+        if (event.key === 'Enter') addAssistant();
+      });
+    }
+
+    function escapeAttr(text) {
+      return String(text).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function addAssistant() {
+      const input = document.getElementById('assistantInput');
+      const name = input.value.trim();
+      if (!name) return;
+      if (assistants.includes(name)) { alert('该助教已存在'); return; }
+      assistants.push(name);
+      input.value = '';
+      saveToLocal();
+      renderAll();
+    }
+
+    function removeAssistant(name) {
+      Object.keys(schedule).forEach(key => {
+        schedule[key] = schedule[key].filter(item => item !== name);
+        if (schedule[key].length === 0) delete schedule[key];
+      });
+      assistants = assistants.filter(item => item !== name);
+      saveToLocal();
+      renderAll();
+    }
+
+    function addToSlotDirect(slotIndex, name) {
+      if (!schedule[slotIndex]) schedule[slotIndex] = [];
+      if (schedule[slotIndex].includes(name)) return;
+      schedule[slotIndex].push(name);
+      saveToLocal();
+      renderAll();
+    }
+
+    function removeFromSlot(slotIndex, name) {
+      if (!schedule[slotIndex]) return;
+      schedule[slotIndex] = schedule[slotIndex].filter(item => item !== name);
+      if (schedule[slotIndex].length === 0) delete schedule[slotIndex];
+      saveToLocal();
+      renderAll();
+    }
+
+    function resetSchedule() {
+      if (Object.keys(schedule).length === 0) return;
+      if (!confirm('确定清空所有排班吗？')) return;
+      schedule = {};
+      saveToLocal();
+      renderAll();
+    }
+
+    function getAllAssigned() {
+      const assigned = new Set();
+      Object.values(schedule).forEach(list => list.forEach(name => assigned.add(name)));
+      return [...assigned];
+    }
+
+    function renderAll() {
+      renderTags();
+      renderSchedule();
+      renderStats();
+    }
+
+    function renderTags() {
+      const container = document.getElementById('assistantTags');
+      const assigned = getAllAssigned();
+      document.getElementById('assistantCount').textContent = `(${assistants.length}人)`;
+      if (assistants.length === 0) {
+        container.innerHTML = '<div class="empty-hint">还没有添加助教，请在上方输入或上传表格</div>';
+        return;
+      }
+      container.innerHTML = assistants.map(name => {
+        const safe = escapeAttr(name);
+        return `<span class="tag ${assigned.includes(name) ? 'assigned' : ''}">${safe}<span class="remove" onclick="removeAssistant('${safe}')">&times;</span></span>`;
+      }).join('');
+    }
+
+    function renderSchedule() {
+      const container = document.getElementById('scheduleList');
+      container.innerHTML = timeSlots.map((slot, index) => {
+        const assigned = schedule[index] || [];
+        const assignedHtml = assigned.length > 0
+          ? assigned.map(name => {
+              const safe = escapeAttr(name);
+              return `<span class="assigned-tag">${safe}<span class="x" onclick="removeFromSlot(${index},'${safe}')">&times;</span></span>`;
+            }).join('')
+          : '<span style="font-size:12px;color:#aeaeb2;">暂无安排</span>';
+        const pickers = assistants.length > 0
+          ? assistants.map(name => {
+              const safe = escapeAttr(name);
+              const isInSlot = assigned.includes(name);
+              const action = isInSlot ? `removeFromSlot(${index},'${safe}')` : `addToSlotDirect(${index},'${safe}')`;
+              return `<span class="pick-tag ${isInSlot ? 'picked' : ''}" onclick="${action}">${safe}</span>`;
+            }).join('')
+          : '<span style="font-size:12px;color:#aeaeb2;">请先添加助教</span>';
+        return `<div class="schedule-card">
+          <div class="time-header">
+            <div><div class="time-label">${escapeAttr(slot.label)}</div><div class="time-sub">${escapeAttr(slot.time)}</div></div>
+            <div class="time-count">${assigned.length}人</div>
+          </div>
+          <div class="assigned-list">${assignedHtml}</div>
+          <div class="pick-area">${pickers}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderStats() {
+      const assigned = getAllAssigned().length;
+      document.getElementById('statTotal').textContent = assistants.length;
+      document.getElementById('statAssigned').textContent = assigned;
+      document.getElementById('statFree').textContent = assistants.length - assigned;
+    }
+
+    function renderTimeConfig() {
+      const container = document.getElementById('timeSlotsConfig');
+      container.innerHTML = timeSlots.map((slot, index) => `<div class="time-edit">
+        <label>时段${index + 1}:</label>
+        <input value="${escapeAttr(slot.label)}" onchange="timeSlots[${index}].label=this.value; saveToLocal(); renderAll();">
+        <input value="${escapeAttr(slot.time)}" onchange="timeSlots[${index}].time=this.value; saveToLocal(); renderAll();">
+      </div>`).join('');
+    }
+
+    function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const resultEl = document.getElementById('uploadResult');
+      resultEl.innerHTML = '';
+      const reader = new FileReader();
+      reader.onload = function(loadEvent) {
+        try {
+          let names = [];
+          if (file.name.endsWith('.csv')) {
+            const lines = loadEvent.target.result.split(/\r?\n/).filter(line => line.trim());
+            lines.forEach(line => {
+              const cols = line.split(/[,，\t]/);
+              const name = cols[0].trim().replace(/"/g, '');
+              if (name) names.push({ name, red: false });
+            });
+          } else {
+            const data = new Uint8Array(loadEvent.target.result);
+            const wb = XLSX.read(data, { type: 'array', cellStyles: true });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+            for (let row = range.s.r; row <= range.e.r; row++) {
+              const cell = ws[XLSX.utils.encode_cell({ r: row, c: 0 })];
+              if (!cell || !cell.v) continue;
+              const name = String(cell.v).trim();
+              if (!name) continue;
+              let isRed = false;
+              if (cell.s && cell.s.font && cell.s.font.color) {
+                const color = cell.s.font.color;
+                const rgb = (color.rgb || '').toUpperCase();
+                if (rgb.includes('FF0000') || rgb === 'FFFF0000' || color.theme === 2) isRed = true;
+              }
+              names.push({ name, red: isRed });
+            }
+          }
+          let added = 0;
+          let skipped = 0;
+          names.forEach(({ name, red }) => {
+            if (red) { skipped++; return; }
+            if (!assistants.includes(name)) {
+              assistants.push(name);
+              added++;
+            }
+          });
+          saveToLocal();
+          renderAll();
+          let message = `✅ 成功导入 ${added} 名助教`;
+          if (skipped > 0) message += `（${skipped} 名标红已排除）`;
+          if (names.length - skipped - added > 0) message += `（${names.length - skipped - added} 名重复已跳过）`;
+          resultEl.innerHTML = `<div class="upload-result">${message}</div>`;
+        } catch (error) {
+          resultEl.innerHTML = `<div class="upload-result error">❌ 读取失败：${error.message}</div>`;
+        }
+        event.target.value = '';
+      };
+      if (file.name.endsWith('.csv')) reader.readAsText(file);
+      else reader.readAsArrayBuffer(file);
+    }
+
+    function saveToLocal() {
+      localStorage.setItem('ta_system_v2', JSON.stringify({ assistants, timeSlots, schedule }));
+    }
+
+    function loadFromLocal() {
+      const data = localStorage.getItem('ta_system_v2');
+      if (!data) return;
+      try {
+        const parsed = JSON.parse(data);
+        assistants = parsed.assistants || [];
+        timeSlots = parsed.timeSlots || timeSlots;
+        schedule = parsed.schedule || {};
+      } catch (error) {}
+    }
+
+    function exportText() {
+      if (assistants.length === 0) { alert('没有数据可导出'); return; }
+      const allAssigned = getAllAssigned();
+      const free = assistants.filter(name => !allAssigned.includes(name));
+      let text = `📋 助教排班表\n${'='.repeat(30)}\n\n`;
+      text += `📅 日期：${new Date().toLocaleDateString('zh-CN')}\n\n`;
+      text += '【排班安排】\n';
+      timeSlots.forEach((slot, index) => {
+        const names = schedule[index] || [];
+        text += `${slot.label}（${slot.time}）→ ${names.length > 0 ? names.join('、') : '未安排'}\n`;
+      });
+      text += `\n【空闲助教】${free.length > 0 ? free.join('、') : '无'}\n`;
+      text += `\n【已安排助教】${allAssigned.length > 0 ? allAssigned.join('、') : '无'}\n`;
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => alert('已复制到剪贴板！'));
+      else prompt('复制以下内容：', text);
+    }
+
+    init();
+  </script>
+</body>
+</html>
