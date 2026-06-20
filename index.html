@@ -4,12 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>助教排班系统</title>
+  <link rel="icon" href="data:,">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f7; min-height: 100vh; color: #1d1d1f; }
     .header { background: #fff; padding: 16px 20px; border-bottom: 1px solid #e5e5e7; position: sticky; top: 0; z-index: 10; }
+    .header-inner { max-width: 600px; margin: 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .header h1 { font-size: 18px; font-weight: 600; }
     .header p { font-size: 13px; color: #86868b; margin-top: 2px; }
+    .sync-status { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 999px; background: #f5f5f7; color: #86868b; font-size: 12px; white-space: nowrap; border: 1px solid #ececf0; }
+    .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #aeaeb2; }
+    .sync-status.online { color: #2e7d32; background: #e8f5e9; border-color: #d7ead9; }
+    .sync-status.online .sync-dot { background: #2e7d32; }
+    .sync-status.saving { color: #0071e3; background: #edf6ff; border-color: #d8eaff; }
+    .sync-status.saving .sync-dot { background: #0071e3; }
+    .sync-status.offline { color: #d35400; background: #fff4e5; border-color: #ffe0b2; }
+    .sync-status.offline .sync-dot { background: #e67e22; }
     .container { max-width: 600px; margin: 0 auto; padding: 16px; }
     .section, .schedule-card, .stat-item { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
     .section { border-radius: 12px; padding: 16px; margin-bottom: 12px; }
@@ -67,6 +77,7 @@
     .upload-result.error { color: #ff3b30; }
     #fileInput { display: none; }
     @media (max-width: 400px) {
+      .header-inner { flex-direction: column; align-items: flex-start; }
       .time-header { flex-direction: column; align-items: flex-start; gap: 2px; }
       .input-row, .actions { flex-wrap: wrap; }
     }
@@ -74,8 +85,13 @@
 </head>
 <body>
   <div class="header">
-    <h1>📋 助教排班系统</h1>
-    <p>添加助教 → 设置时间段 → 安排上课</p>
+    <div class="header-inner">
+      <div>
+        <h1>📋 助教排班系统</h1>
+        <p>添加助教 → 设置时间段 → 安排上课</p>
+      </div>
+      <div id="syncStatus" class="sync-status offline"><span class="sync-dot"></span><span id="syncText">本地模式</span></div>
+    </div>
   </div>
 
   <div class="container">
@@ -108,7 +124,7 @@
 
     <div class="actions">
       <button class="btn-reset" onclick="resetSchedule()">清空排班</button>
-      <button class="btn-save" onclick="saveToLocal(); alert('已保存')">保存</button>
+      <button class="btn-save" onclick="saveNow()">保存</button>
       <button class="btn-export" onclick="exportText()">导出</button>
     </div>
 
@@ -120,14 +136,28 @@
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
-    let assistants = [];
-    let timeSlots = [
+    const DEFAULT_TIME_SLOTS = [
       { label: '上午一', time: '08:30 - 10:30' },
       { label: '上午二', time: '10:30 - 12:30' },
       { label: '下午一', time: '13:30 - 15:30' },
       { label: '下午二', time: '15:30 - 17:30' },
     ];
+    function createClientId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    const CLIENT_ID = localStorage.getItem('ta_client_id') || createClientId();
+    localStorage.setItem('ta_client_id', CLIENT_ID);
+
+    let assistants = [];
+    let timeSlots = [...DEFAULT_TIME_SLOTS];
     let schedule = {};
+    let saveTimer = null;
+    let lastSavedPayload = '';
+    let applyingRemote = false;
 
     function init() {
       loadFromLocal();
@@ -136,10 +166,143 @@
       document.getElementById('assistantInput').addEventListener('keydown', event => {
         if (event.key === 'Enter') addAssistant();
       });
+      loadFromServer();
+      connectRealtime();
     }
 
-    function escapeAttr(text) {
-      return String(text).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    function setSyncStatus(mode, text) {
+      const status = document.getElementById('syncStatus');
+      const label = document.getElementById('syncText');
+      status.className = `sync-status ${mode}`;
+      label.textContent = text;
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeJsString(text) {
+      return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    }
+
+    function getState() {
+      return {
+        assistants,
+        timeSlots,
+        schedule,
+        updatedBy: CLIENT_ID
+      };
+    }
+
+    function applyState(state) {
+      if (!state || typeof state !== 'object') return;
+      assistants = Array.isArray(state.assistants) ? state.assistants : [];
+      timeSlots = Array.isArray(state.timeSlots) && state.timeSlots.length ? state.timeSlots : [...DEFAULT_TIME_SLOTS];
+      schedule = state.schedule && typeof state.schedule === 'object' ? state.schedule : {};
+      saveToLocalOnly();
+      renderTimeConfig();
+      renderAll();
+    }
+
+    async function loadFromServer() {
+      try {
+        setSyncStatus('saving', '正在读取');
+        const response = await fetch('/api/state', { cache: 'no-store' });
+        if (!response.ok) throw new Error('读取失败');
+        const state = await response.json();
+        applyingRemote = true;
+        applyState(state);
+        applyingRemote = false;
+        lastSavedPayload = JSON.stringify(getStateForSave());
+        setSyncStatus('online', '已同步');
+      } catch (error) {
+        applyingRemote = false;
+        setSyncStatus('offline', '本地模式');
+      }
+    }
+
+    function connectRealtime() {
+      if (!window.EventSource) {
+        setSyncStatus('offline', '本地模式');
+        return;
+      }
+
+      let source;
+      try {
+        source = new EventSource('/events');
+      } catch (error) {
+        setSyncStatus('offline', '本地模式');
+        return;
+      }
+      source.addEventListener('open', () => setSyncStatus('online', '已同步'));
+      source.addEventListener('state', event => {
+        try {
+          const state = JSON.parse(event.data);
+          applyingRemote = true;
+          applyState(state);
+          applyingRemote = false;
+          lastSavedPayload = JSON.stringify(getStateForSave());
+          setSyncStatus('online', '已同步');
+        } catch (error) {
+          applyingRemote = false;
+        }
+      });
+      source.addEventListener('error', () => {
+        setSyncStatus('offline', '正在重连');
+      });
+    }
+
+    function getStateForSave() {
+      return { assistants, timeSlots, schedule, updatedBy: CLIENT_ID };
+    }
+
+    function saveToLocalOnly() {
+      localStorage.setItem('ta_system_v2', JSON.stringify({ assistants, timeSlots, schedule }));
+    }
+
+    function queueSave() {
+      saveToLocalOnly();
+      renderAll();
+      if (applyingRemote) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => saveToServer(), 180);
+    }
+
+    async function saveToServer() {
+      const payload = JSON.stringify(getStateForSave());
+      if (payload === lastSavedPayload) {
+        setSyncStatus('online', '已同步');
+        return;
+      }
+      try {
+        setSyncStatus('saving', '正在同步');
+        const response = await fetch('/api/state', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload
+        });
+        if (!response.ok) throw new Error('保存失败');
+        const state = await response.json();
+        lastSavedPayload = JSON.stringify(getStateForSave());
+        applyingRemote = true;
+        applyState(state);
+        applyingRemote = false;
+        setSyncStatus('online', '已同步');
+      } catch (error) {
+        applyingRemote = false;
+        setSyncStatus('offline', '本地已保存');
+      }
+    }
+
+    function saveNow() {
+      clearTimeout(saveTimer);
+      saveToLocalOnly();
+      saveToServer();
     }
 
     function addAssistant() {
@@ -149,8 +312,7 @@
       if (assistants.includes(name)) { alert('该助教已存在'); return; }
       assistants.push(name);
       input.value = '';
-      saveToLocal();
-      renderAll();
+      queueSave();
     }
 
     function removeAssistant(name) {
@@ -159,32 +321,34 @@
         if (schedule[key].length === 0) delete schedule[key];
       });
       assistants = assistants.filter(item => item !== name);
-      saveToLocal();
-      renderAll();
+      queueSave();
     }
 
     function addToSlotDirect(slotIndex, name) {
       if (!schedule[slotIndex]) schedule[slotIndex] = [];
       if (schedule[slotIndex].includes(name)) return;
       schedule[slotIndex].push(name);
-      saveToLocal();
-      renderAll();
+      queueSave();
     }
 
     function removeFromSlot(slotIndex, name) {
       if (!schedule[slotIndex]) return;
       schedule[slotIndex] = schedule[slotIndex].filter(item => item !== name);
       if (schedule[slotIndex].length === 0) delete schedule[slotIndex];
-      saveToLocal();
-      renderAll();
+      queueSave();
     }
 
     function resetSchedule() {
       if (Object.keys(schedule).length === 0) return;
       if (!confirm('确定清空所有排班吗？')) return;
       schedule = {};
-      saveToLocal();
-      renderAll();
+      queueSave();
+    }
+
+    function updateTimeSlot(index, field, value) {
+      timeSlots[index][field] = value;
+      renderTimeConfig();
+      queueSave();
     }
 
     function getAllAssigned() {
@@ -208,8 +372,9 @@
         return;
       }
       container.innerHTML = assistants.map(name => {
-        const safe = escapeAttr(name);
-        return `<span class="tag ${assigned.includes(name) ? 'assigned' : ''}">${safe}<span class="remove" onclick="removeAssistant('${safe}')">&times;</span></span>`;
+        const label = escapeHtml(name);
+        const actionName = escapeJsString(name);
+        return `<span class="tag ${assigned.includes(name) ? 'assigned' : ''}">${label}<span class="remove" onclick="removeAssistant('${actionName}')">&times;</span></span>`;
       }).join('');
     }
 
@@ -219,21 +384,23 @@
         const assigned = schedule[index] || [];
         const assignedHtml = assigned.length > 0
           ? assigned.map(name => {
-              const safe = escapeAttr(name);
-              return `<span class="assigned-tag">${safe}<span class="x" onclick="removeFromSlot(${index},'${safe}')">&times;</span></span>`;
+              const label = escapeHtml(name);
+              const actionName = escapeJsString(name);
+              return `<span class="assigned-tag">${label}<span class="x" onclick="removeFromSlot(${index},'${actionName}')">&times;</span></span>`;
             }).join('')
           : '<span style="font-size:12px;color:#aeaeb2;">暂无安排</span>';
         const pickers = assistants.length > 0
           ? assistants.map(name => {
-              const safe = escapeAttr(name);
+              const label = escapeHtml(name);
+              const actionName = escapeJsString(name);
               const isInSlot = assigned.includes(name);
-              const action = isInSlot ? `removeFromSlot(${index},'${safe}')` : `addToSlotDirect(${index},'${safe}')`;
-              return `<span class="pick-tag ${isInSlot ? 'picked' : ''}" onclick="${action}">${safe}</span>`;
+              const action = isInSlot ? `removeFromSlot(${index},'${actionName}')` : `addToSlotDirect(${index},'${actionName}')`;
+              return `<span class="pick-tag ${isInSlot ? 'picked' : ''}" onclick="${action}">${label}</span>`;
             }).join('')
           : '<span style="font-size:12px;color:#aeaeb2;">请先添加助教</span>';
         return `<div class="schedule-card">
           <div class="time-header">
-            <div><div class="time-label">${escapeAttr(slot.label)}</div><div class="time-sub">${escapeAttr(slot.time)}</div></div>
+            <div><div class="time-label">${escapeHtml(slot.label)}</div><div class="time-sub">${escapeHtml(slot.time)}</div></div>
             <div class="time-count">${assigned.length}人</div>
           </div>
           <div class="assigned-list">${assignedHtml}</div>
@@ -253,8 +420,8 @@
       const container = document.getElementById('timeSlotsConfig');
       container.innerHTML = timeSlots.map((slot, index) => `<div class="time-edit">
         <label>时段${index + 1}:</label>
-        <input value="${escapeAttr(slot.label)}" onchange="timeSlots[${index}].label=this.value; saveToLocal(); renderAll();">
-        <input value="${escapeAttr(slot.time)}" onchange="timeSlots[${index}].time=this.value; saveToLocal(); renderAll();">
+        <input value="${escapeHtml(slot.label)}" onchange="updateTimeSlot(${index}, 'label', this.value)">
+        <input value="${escapeHtml(slot.time)}" onchange="updateTimeSlot(${index}, 'time', this.value)">
       </div>`).join('');
     }
 
@@ -302,8 +469,7 @@
               added++;
             }
           });
-          saveToLocal();
-          renderAll();
+          queueSave();
           let message = `✅ 成功导入 ${added} 名助教`;
           if (skipped > 0) message += `（${skipped} 名标红已排除）`;
           if (names.length - skipped - added > 0) message += `（${names.length - skipped - added} 名重复已跳过）`;
@@ -317,17 +483,13 @@
       else reader.readAsArrayBuffer(file);
     }
 
-    function saveToLocal() {
-      localStorage.setItem('ta_system_v2', JSON.stringify({ assistants, timeSlots, schedule }));
-    }
-
     function loadFromLocal() {
       const data = localStorage.getItem('ta_system_v2');
       if (!data) return;
       try {
         const parsed = JSON.parse(data);
         assistants = parsed.assistants || [];
-        timeSlots = parsed.timeSlots || timeSlots;
+        timeSlots = parsed.timeSlots || [...DEFAULT_TIME_SLOTS];
         schedule = parsed.schedule || {};
       } catch (error) {}
     }
